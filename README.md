@@ -359,20 +359,39 @@ If you've enabled auto-refresh in the main configuration:
 // Enable auto-refresh in the Guardian constructor
 g, _ := guardian.New(
     guardian.WithSecretKey("your-secret"),
-    guardian.WithAutoRefresh(15 * time.Minute), // Refresh when less than 15 minutes remaining
+    // Enable global auto-refresh and set the default threshold
+    // The token will be refreshed if its remaining validity is less than 15 minutes
+    guardian.WithAutoRefresh(15 * time.Minute),
+)
+```
+
+When you apply the Auth middleware and auto-refresh is enabled, the refresh functionality will be automatically included:
+
+```go
+// Apply standard authentication middleware 
+router.Use(g.Auth())
+```
+
+For more control over the refresh behavior, you can manually configure the auto-refresh middleware:
+
+```go
+import (
+    "github.com/simp-lee/guardian"
+    "github.com/simp-lee/guardian/middleware"
 )
 
-// Configure specific authentication middleware options, including token refresh handling
-g.Auth(
+// Apply the auto-refresh middleware with custom options
+router.Use(middleware.AutoRefresh(
     // Callback when a token is refreshed
     guardian.OnTokenRefresh(func(c *gin.Context, oldToken, newToken string) {
         // Log refresh event or perform other actions
         log.Printf("Token refreshed: %s -> %s", oldToken, newToken)
     }),
     
-    // Custom refresh threshold (overrides global setting)
+    // Custom refresh threshold for this specific middleware instance
+    // Overrides the global setting from Guardian constructor
     guardian.WithRefreshThreshold(10 * time.Minute),
-)
+))
 ```
 
 When a token is automatically refreshed, the new token is returned in the HTTP response `X-New-Token` header. Clients should check for this header and use the new token in subsequent requests.
