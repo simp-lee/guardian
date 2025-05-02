@@ -560,6 +560,11 @@ func (g *Guardian) Close() {
 		g.jwt.Close()
 	}
 
+	// Close the storage.
+	if closer, ok := g.config.Storage.(interface{ Close() error }); ok {
+		_ = closer.Close()
+	}
+
 	// Call any cleanup functions.
 	for _, cleanup := range g.cleanupFunctions {
 		if cleanup != nil {

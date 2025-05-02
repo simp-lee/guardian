@@ -203,3 +203,8 @@ func (s *MemoryStorage) HasPermission(roleID, resource, action string) (bool, er
 
 	return false, nil
 }
+
+func (s *MemoryStorage) Close() error {
+	// No resources to clean up in memory storage
+	return nil
+}

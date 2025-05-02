@@ -46,6 +46,8 @@ type Storage interface {
 	AddRolePermission(roleID, resource, action string) error
 	RemoveRolePermission(roleID, resource string) error
 	HasPermission(roleID, resource, action string) (bool, error)
+
+	Close() error
 }
 
 // Common errors

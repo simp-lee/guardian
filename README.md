@@ -10,7 +10,7 @@
 - **Permission Management**: Resource and action-based permission checks
 - **Token Lifecycle Management**: Generate, validate, refresh, and revoke tokens
 - **Rate Limiting**: Protection against brute force attacks
-- **Flexible Storage**: In-memory storage by default with customizable backends
+- **Flexible Storage**: In-memory storage by default with SQL storage support (MySQL, PostgreSQL, SQLite) and customizable backends
 - **Hierarchical Resource Paths**: Support for nested resource permissions with wildcards
 - **Auto Refresh**: Automatically refresh tokens before expiration
 - **Custom Error Handling**: Fine-grained control over error responses
@@ -42,7 +42,7 @@ func main() {
     if err != nil {
         panic(err)
     }
-    defer g.Close() // Ensure resources are properly cleaned up
+    defer g.Close()
     
     // Create roles
     g.CreateRole("admin", "Administrator", "Full system access")
@@ -485,13 +485,147 @@ The rate limit middleware adds the following headers to responses:
 - `X-RateLimit-Limit`: Indicates the rate limit ceiling
 - `X-RateLimit-Remaining`: Indicates the number of tokens remaining
 
-## Storage Subsystem
+## Storage Options
 
-`Guardian` uses a flexible `Storage` interface that allows different backends to be plugged in. By default, it uses an in-memory storage implementation, but you can provide your own implementation for persistence.
+`Guardian` supports multiple storage backends for roles, permissions and user-role mappings:
 
-### Storage Interface
+### Memory Storage (Default)
 
-The `Storage` interface defines methods for managing roles, user-role associations, and permissions:
+By default, `Guardian` uses an in-memory storage implementation that stores all data in Go maps:
+
+```go
+// Using the default memory storage
+g, _ := guardian.New(
+    guardian.WithSecretKey("your-secret-key"),
+    // No storage option specified - memory storage will be used
+)
+```
+
+Memory storage is suitable for testing or applications where persistence is not required. However, all data will be lost when the application restarts.
+
+### SQL Storage
+
+For production systems, `Guardian` provides SQL-based storage implementations that persist role and permission data to a database:
+
+```go
+import (
+    "github.com/simp-lee/guardian"
+    "github.com/simp-lee/guardian/storage"
+    _ "github.com/go-sql-driver/mysql" // Import MySQL driver
+)
+
+// Create MySQL storage
+sqlStorage, err := storage.CreateMySQLStorage(
+    "user:password@tcp(127.0.0.1:3306)/guardian_db?parseTime=true"
+)
+if err != nil {
+    log.Fatalf("Failed to create SQL storage: %v", err)
+}
+
+// Create Guardian instance with SQL storage
+g, err := guardian.New(
+    guardian.WithSecretKey("your-secure-secret-key"),
+    guardian.WithStorage(sqlStorage),
+)
+if err != nil {
+    log.Fatalf("Failed to create Guardian: %v", err)
+}
+defer g.Close()
+```
+
+#### Supported Database Systems
+
+Guardian currently supports the following database systems:
+
+1. **MySQL/MariaDB**:
+   ```go
+   storage, err := storage.CreateMySQLStorage(
+       "user:password@tcp(127.0.0.1:3306)/dbname?parseTime=true"
+   )
+   ```
+
+2. **PostgreSQL**:
+   ```go
+   storage, err := storage.CreatePostgresStorage(
+       "host=localhost port=5432 user=postgres password=secret dbname=guardian_db sslmode=disable"
+   )
+   ```
+
+3. **SQLite**:
+   ```go
+   storage, err := storage.CreateSQLiteStorage("path/to/database.db")
+   // Or use in-memory SQLite database
+   storage, err := storage.CreateSQLiteStorage(":memory:")
+   ```
+
+#### Using with GORM
+
+If your application already uses `GORM` for database access, you can integrate `Guardian` with your existing database connection:
+
+```go
+import (
+    "github.com/simp-lee/guardian"
+    "github.com/simp-lee/guardian/storage"
+    "gorm.io/driver/mysql"
+    "gorm.io/gorm"
+)
+
+// Create GORM connection
+dsn := "user:password@tcp(127.0.0.1:3306)/database?charset=utf8mb4&parseTime=True&loc=Local"
+gormDB, err := gorm.Open(mysql.Open(dsn), &gorm.Config{})
+if err != nil {
+    log.Fatalf("Failed to connect to database: %v", err)
+}
+
+// Get the underlying *sql.DB instance
+sqlDB, err := gormDB.DB()
+if err != nil {
+    log.Fatalf("Failed to get underlying sql.DB: %v", err)
+}
+
+// Create Guardian storage using the existing connection
+guardianStorage, err := storage.NewSQLStorage(sqlDB)
+if err != nil {
+    log.Fatalf("Failed to create Guardian storage: %v", err)
+}
+
+// Create Guardian instance
+g, err := guardian.New(
+    guardian.WithSecretKey("your-secure-key"),
+    guardian.WithStorage(guardianStorage),
+)
+```
+
+#### Database Schema
+
+When using SQL storage, `Guardian` automatically creates the following tables:
+
+- `guardian_roles`: Stores role definitions and permissions
+- `guardian_user_roles`: Stores user-role associations
+
+The tables are created with `IF NOT EXISTS` clauses, so they won't conflict with existing tables.
+
+### Database Driver Installation
+
+Depending on your chosen database system, you'll need to install the appropriate driver:
+
+```bash
+# MySQL driver
+go get github.com/go-sql-driver/mysql
+
+# PostgreSQL driver
+go get github.com/lib/pq
+
+# SQLite driver (CGO required)
+go get github.com/mattn/go-sqlite3
+
+# SQLite driver (Pure Go, no CGO)
+go get modernc.org/sqlite
+```
+
+### Custom Storage Implementation
+
+You can implement your own storage backend by implementing the Storage interface:
 
 ```go
 type Storage interface {
@@ -511,65 +645,21 @@ type Storage interface {
     AddRolePermission(roleID, resource, action string) error
     RemoveRolePermission(roleID, resource string) error
     HasPermission(roleID, resource, action string) (bool, error)
+
+    // Resource management
+    Close() error
 }
 ```
 
-### Role Structure
-
-`Roles` are the central entity in the `RBAC` system:
+Then use your custom implementation with Guardian:
 
 ```go
-type Role struct {
-    ID          string
-    Name        string
-    Description string
-    Permissions map[string][]string // resource -> []actions
-    CreatedAt   time.Time
-    UpdatedAt   time.Time
-}
-```
-
-Each role contains a map of resources to actions, representing what actions are allowed on each resource.
-
-### Using Custom Storage
-
-You can implement your own storage backend by implementing the `Storage` interface. This allows you to persist roles, permissions, and user-role mappings in databases or other storage systems.
-
-```go
-// Create a custom storage implementation
-type MyDatabaseStorage struct {
-    db *sql.DB
-    // ...other fields
-}
-
-// Implement all methods from the Storage interface
-func (s *MyDatabaseStorage) CreateRole(role *Role) error {
-    // Implementation that uses your database
-}
-
-// ... implement other methods
-
-// Use your custom storage with Guardian
-customStorage := NewMyDatabaseStorage(dbConnection)
+customStorage := NewMyCustomStorage(...)
 g, _ := guardian.New(
     guardian.WithSecretKey("your-secret-key"),
     guardian.WithStorage(customStorage),
 )
 ```
-
-### Memory Storage
-
-By default, `Guardian` uses an in-memory implementation that stores all data in Go maps:
-
-```go
-// If no custom storage is provided, Guardian uses memory storage
-g, _ := guardian.New(
-    guardian.WithSecretKey("your-secret-key"),
-    // Memory storage will be used automatically
-)
-```
-
-The memory storage implementation is suitable for testing or applications where persistence is not required. For production systems with high availability requirements, you should implement a custom storage backend that persists data to a database.
 
 ## Error Handling
 
