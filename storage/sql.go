@@ -102,7 +102,7 @@ func (s *SQLStorage) CreateRole(role *Role) error {
 // GetRole implements Storage.GetRole.
 func (s *SQLStorage) GetRole(roleID string) (*Role, error) {
 	if roleID == "" {
-		return nil, errors.New("storage: roleID cannot be empty")
+		return nil, ErrRoleNotFound
 	}
 
 	var role Role
