@@ -50,6 +50,9 @@ func New(options ...Option) (*Guardian, error) {
 
 	if config.Storage == nil {
 		config.Storage = storage.NewMemoryStorage()
+	} else if config.EnableCache {
+		// Wrap the provided storage with caching capabilities
+		config.Storage = storage.NewCachedStorage(config.Storage, config.CacheConfig)
 	}
 
 	jwtService, err := jwt.New(&jwt.Config{
@@ -574,4 +577,58 @@ func (g *Guardian) Close() {
 
 	// Clear the cleanup functions slice.
 	g.cleanupFunctions = nil
+}
+
+// GetCacheStats returns cache hit and miss statistics for roles and user-roles.
+// This provides insights into cache performance and effectiveness.
+//
+// Returns:
+//   - roleHits: Number of times roles were found in cache
+//   - roleMisses: Number of times roles had to be fetched from storage
+//   - userRoleHits: Number of times user roles were found in cache
+//   - userRoleMisses: Number of times user roles had to be fetched from storage
+//
+// Example:
+//
+//	roleHits, roleMisses, userRoleHits, userRoleMisses := g.GetCacheStats()
+//	hitRate := float64(roleHits) / float64(roleHits + roleMisses) * 100
+//	fmt.Printf("Role cache hit rate: %.2f%%\n", hitRate)
+func (g *Guardian) GetCacheStats() (roleHits, roleMisses, userRoleHits, userRoleMisses int64) {
+	if cachedStorage, ok := g.config.Storage.(*storage.CachedStorage); ok {
+		return cachedStorage.Stats()
+	}
+	return 0, 0, 0, 0
+}
+
+// GetCacheSize returns the current number of entries in the role and user-role caches.
+// This helps monitor memory usage by the cache system.
+//
+// Returns:
+//   - roleCacheSize: Number of roles currently stored in cache
+//   - userRoleCacheSize: Number of user-role relationships currently stored in cache
+//
+// Example:
+//
+//	roleCacheSize, userRoleCacheSize := g.GetCacheSize()
+//	fmt.Printf("Cache contains %d roles and %d user-role entries\n",
+//	    roleCacheSize, userRoleCacheSize)
+func (g *Guardian) GetCacheSize() (roleCacheSize, userRoleCacheSize int) {
+	if cachedStorage, ok := g.config.Storage.(*storage.CachedStorage); ok {
+		return cachedStorage.GetCacheSize()
+	}
+	return 0, 0
+}
+
+// ClearCache invalidates and removes all cached entries.
+// This is useful after bulk permission changes or during testing.
+//
+// Example:
+//
+//	// After bulk role/permission updates
+//	adminService.UpdateManyRoles()
+//	g.ClearCache() // Ensure the cache reflects the new changes immediately
+func (g *Guardian) ClearCache() {
+	if cachedStorage, ok := g.config.Storage.(*storage.CachedStorage); ok {
+		cachedStorage.ClearCache()
+	}
 }

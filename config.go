@@ -20,6 +20,10 @@ type Config struct {
 
 	RefreshThreshold  time.Duration
 	EnableAutoRefresh bool
+
+	// Cache related configurations
+	EnableCache bool
+	CacheConfig storage.CacheConfig
 }
 
 // DefaultConfig returns a configuration with reasonable defaults.
@@ -30,6 +34,8 @@ func DefaultConfig() Config {
 		CleanupInterval:   1 * time.Hour,
 		RefreshThreshold:  5 * time.Minute,
 		EnableAutoRefresh: false,
+		EnableCache:       true,
+		CacheConfig:       storage.DefaultCacheConfig(),
 	}
 }
 
@@ -76,6 +82,41 @@ func WithAutoRefresh(threshold time.Duration) Option {
 	return func(c *Config) {
 		c.RefreshThreshold = threshold
 		c.EnableAutoRefresh = true
+	}
+}
+
+// WithCache enables or disables the storage caching layer
+func WithCache(enable bool) Option {
+	return func(c *Config) {
+		c.EnableCache = enable
+	}
+}
+
+// WithCacheConfig sets the cache configuration options
+func WithCacheConfig(config storage.CacheConfig) Option {
+	return func(c *Config) {
+		c.CacheConfig = config
+	}
+}
+
+// WithRoleCacheTTL sets the expiration time for role cache entries
+func WithRoleCacheTTL(ttl time.Duration) Option {
+	return func(c *Config) {
+		c.CacheConfig.RoleCacheTTL = ttl
+	}
+}
+
+// WithUserRoleCacheTTL sets the expiration time for user role cache entries
+func WithUserRoleCacheTTL(ttl time.Duration) Option {
+	return func(c *Config) {
+		c.CacheConfig.UserRoleCacheTTL = ttl
+	}
+}
+
+// WithCacheCleanupInterval sets how often the cache cleanup routine runs
+func WithCacheCleanupInterval(interval time.Duration) Option {
+	return func(c *Config) {
+		c.CacheConfig.CleanupInterval = interval
 	}
 }
 
