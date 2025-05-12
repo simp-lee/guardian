@@ -1,7 +1,9 @@
 package rbac
 
 import (
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/simp-lee/guardian/storage"
 )
@@ -563,5 +565,385 @@ func TestRBACHasPermissionEdgeCases(t *testing.T) {
 	has, err = rbac.HasPermission("path-user", "api/posts/123", "write")
 	if err != nil || has {
 		t.Fatalf("Expected permission check for different action to fail, err: %v, has: %v", err, has)
+	}
+}
+
+// TestUserDirectPermissionManagement tests the user-specific permission functionality
+func TestUserDirectPermissionManagement(t *testing.T) {
+	s := NewMemoryStorage()
+	rbac := NewRBACService(s)
+
+	// Test adding direct permission to user
+	err := rbac.AddUserPermission("user1", "articles", "delete")
+	if err != nil {
+		t.Fatalf("Expected successful user permission addition, but got error: %v", err)
+	}
+
+	// Test adding duplicate permission
+	err = rbac.AddUserPermission("user1", "articles", "delete")
+	if err != ErrPermissionAlreadyExists {
+		t.Fatalf("Expected adding duplicate user permission to return ErrPermissionAlreadyExists, but got: %v", err)
+	}
+
+	// Verify direct permission
+	has, err := rbac.HasUserDirectPermission("user1", "articles", "delete")
+	if err != nil || !has {
+		t.Fatalf("Expected user to have direct permission, err: %v, has: %v", err, has)
+	}
+
+	// Verify through regular permission check as well
+	has, err = rbac.HasPermission("user1", "articles", "delete")
+	if err != nil || !has {
+		t.Fatalf("Expected HasPermission to find user direct permission, err: %v, has: %v", err, has)
+	}
+
+	// Test permission that user doesn't have
+	has, err = rbac.HasUserDirectPermission("user1", "articles", "create")
+	if err != nil || has {
+		t.Fatalf("Expected user not to have permission, err: %v, has: %v", err, has)
+	}
+
+	// Test adding multiple permissions at once
+	err = rbac.AddUserPermissions("user1", "comments", []string{"create", "edit", "delete"})
+	if err != nil {
+		t.Fatalf("Expected successful multiple user permissions addition, but got error: %v", err)
+	}
+
+	// Verify multiple permissions
+	for _, action := range []string{"create", "edit", "delete"} {
+		has, err = rbac.HasUserDirectPermission("user1", "comments", action)
+		if err != nil || !has {
+			t.Fatalf("Expected user to have '%s' permission on 'comments', err: %v, has: %v", action, err, has)
+		}
+	}
+
+	// Test removing specific permission
+	err = rbac.RemoveUserPermission("user1", "comments", "edit")
+	if err != nil {
+		t.Fatalf("Expected successful user permission removal, but got error: %v", err)
+	}
+
+	// Verify permission was removed
+	has, err = rbac.HasUserDirectPermission("user1", "comments", "edit")
+	if err != nil || has {
+		t.Fatalf("Expected permission to be removed, err: %v, has: %v", err, has)
+	}
+
+	// Verify other permissions still exist
+	has, err = rbac.HasUserDirectPermission("user1", "comments", "create")
+	if err != nil || !has {
+		t.Fatalf("Expected 'create' permission to still exist, err: %v, has: %v", err, has)
+	}
+
+	// Test removing non-existent permission (should not error)
+	err = rbac.RemoveUserPermission("user1", "comments", "non-existent")
+	if err != nil {
+		t.Fatalf("Expected no error when removing non-existent permission, but got: %v", err)
+	}
+
+	// Test removing non-existent resource (should not error)
+	err = rbac.RemoveUserPermission("user1", "non-existent", "action")
+	if err != nil {
+		t.Fatalf("Expected no error when removing non-existent resource, but got: %v", err)
+	}
+
+	// Test removing all user permissions
+	err = rbac.RemoveAllUserPermissions("user1")
+	if err != nil {
+		t.Fatalf("Expected successful removal of all user permissions, but got error: %v", err)
+	}
+
+	// Verify all permissions were removed
+	has, err = rbac.HasUserDirectPermission("user1", "articles", "delete")
+	if err != nil || has {
+		t.Fatalf("Expected all permissions to be removed, err: %v, has: %v", err, has)
+	}
+
+	has, err = rbac.HasUserDirectPermission("user1", "comments", "create")
+	if err != nil || has {
+		t.Fatalf("Expected all permissions to be removed, err: %v, has: %v", err, has)
+	}
+
+	// Test removing permissions for non-existent user (should not error)
+	err = rbac.RemoveAllUserPermissions("non-existent-user")
+	if err != nil {
+		t.Fatalf("Expected no error when removing permissions for non-existent user, but got: %v", err)
+	}
+}
+
+// TestUserPermissionAndRoleInteraction tests how user-specific permissions interact with role-based permissions
+func TestUserPermissionAndRoleInteraction(t *testing.T) {
+	s := NewMemoryStorage()
+	rbac := NewRBACService(s)
+
+	// Create role with certain permissions
+	rbac.CreateRole("user-role", "User Role", "Basic user permissions")
+	rbac.AddRolePermission("user-role", "articles", "read")
+	rbac.AddRolePermission("user-role", "articles", "comment")
+
+	// Assign role to user
+	rbac.AddUserRole("user2", "user-role")
+
+	// Add direct user permission
+	rbac.AddUserPermission("user2", "articles", "edit")
+
+	// Verify user has permissions from both sources
+	checks := []struct {
+		resource string
+		action   string
+		expected bool
+	}{
+		{"articles", "read", true},    // from role
+		{"articles", "comment", true}, // from role
+		{"articles", "edit", true},    // direct user permission
+		{"articles", "delete", false}, // no permission
+	}
+
+	for _, check := range checks {
+		has, err := rbac.HasPermission("user2", check.resource, check.action)
+		if err != nil || has != check.expected {
+			t.Fatalf("Expected HasPermission(%s, %s) to be %v, got: %v, err: %v",
+				check.resource, check.action, check.expected, has, err)
+		}
+	}
+
+	// Verify HasUserDirectPermission only returns direct permissions
+	directHas, err := rbac.HasUserDirectPermission("user2", "articles", "read")
+	if err != nil || directHas {
+		t.Fatalf("Expected HasUserDirectPermission not to return role permissions, got: %v, err: %v",
+			directHas, err)
+	}
+
+	directHas, err = rbac.HasUserDirectPermission("user2", "articles", "edit")
+	if err != nil || !directHas {
+		t.Fatalf("Expected HasUserDirectPermission to return direct permissions, got: %v, err: %v",
+			directHas, err)
+	}
+
+	// Remove role from user
+	rbac.RemoveUserRole("user2", "user-role")
+
+	// Verify user still has direct permissions but not role permissions
+	has, err := rbac.HasPermission("user2", "articles", "edit")
+	if err != nil || !has {
+		t.Fatalf("Expected user to retain direct permissions after role removal, got: %v, err: %v",
+			has, err)
+	}
+
+	has, err = rbac.HasPermission("user2", "articles", "read")
+	if err != nil || has {
+		t.Fatalf("Expected user to lose role permissions after role removal, got: %v, err: %v",
+			has, err)
+	}
+}
+
+// TestUserDirectPermissionWildcards tests wildcard support in user-specific permissions
+func TestUserDirectPermissionWildcards(t *testing.T) {
+	s := NewMemoryStorage()
+	rbac := NewRBACService(s)
+
+	// Add different types of wildcard permissions
+	rbac.AddUserPermission("user3", "resource1", "*")        // all actions on specific resource
+	rbac.AddUserPermission("user3", "*", "read")             // read action on all resources
+	rbac.AddUserPermission("user3", "api/users/*", "update") // hierarchical wildcard
+
+	// Test wildcard action
+	has, err := rbac.HasUserDirectPermission("user3", "resource1", "anything")
+	if err != nil || !has {
+		t.Fatalf("Expected action wildcard to grant permission, err: %v, has: %v", err, has)
+	}
+
+	// Test wildcard resource
+	has, err = rbac.HasUserDirectPermission("user3", "any-resource", "read")
+	if err != nil || !has {
+		t.Fatalf("Expected resource wildcard to grant permission, err: %v, has: %v", err, has)
+	}
+
+	// Test hierarchical wildcard
+	has, err = rbac.HasUserDirectPermission("user3", "api/users/123", "update")
+	if err != nil || !has {
+		t.Fatalf("Expected hierarchical wildcard to grant permission, err: %v, has: %v", err, has)
+	}
+
+	// Test non-matching action with wildcard resource
+	has, err = rbac.HasUserDirectPermission("user3", "api/users/123", "delete")
+	if err != nil || has {
+		t.Fatalf("Expected non-matching action to be denied, err: %v, has: %v", err, has)
+	}
+
+	// Test deeper hierarchy level
+	has, err = rbac.HasUserDirectPermission("user3", "api/users/123/profile/photo", "update")
+	if err != nil || !has {
+		t.Fatalf("Expected deep hierarchical wildcard to grant permission, err: %v, has: %v", err, has)
+	}
+}
+
+// TestUserDirectPermissionEmptyValues tests input validation for user direct permissions
+func TestUserDirectPermissionEmptyValues(t *testing.T) {
+	s := NewMemoryStorage()
+	rbac := NewRBACService(s)
+
+	// Test empty user ID
+	err := rbac.AddUserPermission("", "resource", "action")
+	if err != ErrEmptyUserID {
+		t.Fatalf("Expected adding permission with empty user ID to return ErrEmptyUserID, but got: %v", err)
+	}
+
+	err = rbac.RemoveUserPermission("", "resource", "action")
+	if err != ErrEmptyUserID {
+		t.Fatalf("Expected removing permission with empty user ID to return ErrEmptyUserID, but got: %v", err)
+	}
+
+	err = rbac.RemoveAllUserPermissions("")
+	if err != ErrEmptyUserID {
+		t.Fatalf("Expected removing all permissions with empty user ID to return ErrEmptyUserID, but got: %v", err)
+	}
+
+	_, err = rbac.HasUserDirectPermission("", "resource", "action")
+	if err != ErrEmptyUserID {
+		t.Fatalf("Expected checking permission with empty user ID to return ErrEmptyUserID, but got: %v", err)
+	}
+
+	// Test empty resource
+	err = rbac.AddUserPermission("user", "", "action")
+	if err != ErrInvalidResource {
+		t.Fatalf("Expected adding permission with empty resource to return ErrInvalidResource, but got: %v", err)
+	}
+
+	_, err = rbac.HasUserDirectPermission("user", "", "action")
+	if err != ErrInvalidResource {
+		t.Fatalf("Expected checking permission with empty resource to return ErrInvalidResource, but got: %v", err)
+	}
+
+	// Test empty action
+	err = rbac.AddUserPermission("user", "resource", "")
+	if err != ErrInvalidAction {
+		t.Fatalf("Expected adding permission with empty action to return ErrInvalidAction, but got: %v", err)
+	}
+
+	_, err = rbac.HasUserDirectPermission("user", "resource", "")
+	if err != ErrInvalidAction {
+		t.Fatalf("Expected checking permission with empty action to return ErrInvalidAction, but got: %v", err)
+	}
+}
+
+// TestUserDirectPermissionPersistenceAfterRoleChanges tests that user direct permissions
+// are maintained even when roles are modified
+func TestUserDirectPermissionPersistenceAfterRoleChanges(t *testing.T) {
+	s := NewMemoryStorage()
+	rbac := NewRBACService(s)
+
+	// Create common setup
+	rbac.CreateRole("role1", "Role 1", "")
+	rbac.AddRolePermission("role1", "resources", "read")
+	rbac.AddUserRole("user4", "role1")
+	rbac.AddUserPermission("user4", "resources", "write")
+
+	// Verify initial state
+	has, _ := rbac.HasPermission("user4", "resources", "read")
+	if !has {
+		t.Fatal("Expected user to have role permission")
+	}
+
+	has, _ = rbac.HasPermission("user4", "resources", "write")
+	if !has {
+		t.Fatal("Expected user to have direct permission")
+	}
+
+	// Delete the role
+	rbac.DeleteRole("role1")
+
+	// User should still have direct permission but lose role permission
+	has, _ = rbac.HasPermission("user4", "resources", "read")
+	if has {
+		t.Fatal("Expected user to lose role permission after role deletion")
+	}
+
+	// Direct permission should still exist
+	has, _ = rbac.HasPermission("user4", "resources", "write")
+	if !has {
+		t.Fatal("Expected user to retain direct permission after role deletion")
+	}
+
+	has, _ = rbac.HasUserDirectPermission("user4", "resources", "write")
+	if !has {
+		t.Fatal("Expected HasUserDirectPermission to find permission after role deletion")
+	}
+}
+
+// TestHasPermissionWithUserDirectPermission tests that HasPermission correctly checks
+// user direct permissions before checking role permissions
+func TestHasPermissionWithUserDirectPermission(t *testing.T) {
+	s := NewMemoryStorage()
+	rbac := NewRBACService(s)
+
+	// Setup: Create a user with both direct and role-based permissions
+	rbac.CreateRole("test-role", "Test Role", "")
+	rbac.AddRolePermission("test-role", "resource", "role-action")
+	rbac.AddUserRole("test-user", "test-role")
+	rbac.AddUserPermission("test-user", "resource", "direct-action")
+
+	// Case 1: User should have direct permission
+	hasPermission, err := rbac.HasPermission("test-user", "resource", "direct-action")
+	if err != nil || !hasPermission {
+		t.Fatalf("Expected HasPermission to find direct permission, err: %v, has: %v", err, hasPermission)
+	}
+
+	// Case 2: User should have role permission
+	hasPermission, err = rbac.HasPermission("test-user", "resource", "role-action")
+	if err != nil || !hasPermission {
+		t.Fatalf("Expected HasPermission to find role permission, err: %v, has: %v", err, hasPermission)
+	}
+
+	// Case 3: User should not have non-existent permission
+	hasPermission, err = rbac.HasPermission("test-user", "resource", "nonexistent-action")
+	if err != nil || hasPermission {
+		t.Fatalf("Expected HasPermission to not find nonexistent permission, err: %v, has: %v", err, hasPermission)
+	}
+
+	// Performance check: Many repeated calls to HasPermission should be efficient
+	start := time.Now()
+	for i := 0; i < 1000; i++ {
+		rbac.HasPermission("test-user", "resource", "direct-action")
+	}
+	duration := time.Since(start)
+	t.Logf("1000 permission checks took %v", duration)
+	// On modern hardware, this should typically be under 50ms
+	if duration > 500*time.Millisecond {
+		t.Fatalf("Permission checking seems inefficient: %v for 1000 checks", duration)
+	}
+}
+
+// TestUserWithNoRolesButDirectPermission tests that a user with no roles
+// but with direct permissions still gets proper permission checks
+func TestUserWithNoRolesButDirectPermission(t *testing.T) {
+	s := NewMemoryStorage()
+	rbac := NewRBACService(s)
+
+	// Add direct permission but no roles
+	rbac.AddUserPermission("standalone-user", "resource", "action")
+
+	// Verify user has no roles
+	roles, err := rbac.GetUserRoles("standalone-user")
+	if err != nil {
+		t.Fatalf("Failed to get user roles: %v", err)
+	}
+
+	// Note: The user should actually have one role - the auto-generated user-specific role
+	// So this check verifies our implementation works as expected
+	if len(roles) != 1 || !strings.HasPrefix(roles[0], "user_specific:") {
+		t.Fatalf("Expected user to have exactly one user-specific role, got: %v", roles)
+	}
+
+	// Check permission through HasPermission
+	hasPermission, err := rbac.HasPermission("standalone-user", "resource", "action")
+	if err != nil || !hasPermission {
+		t.Fatalf("Expected user with only direct permission to have permission, err: %v, has: %v", err, hasPermission)
+	}
+
+	// Check permission through HasUserDirectPermission
+	hasPermission, err = rbac.HasUserDirectPermission("standalone-user", "resource", "action")
+	if err != nil || !hasPermission {
+		t.Fatalf("Expected HasUserDirectPermission to confirm permission, err: %v, has: %v", err, hasPermission)
 	}
 }

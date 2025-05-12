@@ -71,8 +71,9 @@ func (m *mockTokenService) Close() {}
 
 // mockRBACService 实现用于测试的RBACService接口
 type mockRBACService struct {
-	hasPermissionFunc func(userID string, resource string, action string) (bool, error)
-	getUserRolesFunc  func(userID string) ([]string, error)
+	hasPermissionFunc           func(userID string, resource string, action string) (bool, error)
+	getUserRolesFunc            func(userID string) ([]string, error)
+	hasUserDirectPermissionFunc func(userID string, resource string, action string) (bool, error)
 }
 
 func (m *mockRBACService) HasPermission(userID string, resource string, action string) (bool, error) {
@@ -81,6 +82,14 @@ func (m *mockRBACService) HasPermission(userID string, resource string, action s
 
 func (m *mockRBACService) GetUserRoles(userID string) ([]string, error) {
 	return m.getUserRolesFunc(userID)
+}
+
+func (m *mockRBACService) HasUserDirectPermission(userID string, resource string, action string) (bool, error) {
+	if m.hasUserDirectPermissionFunc != nil {
+		return m.hasUserDirectPermissionFunc(userID, resource, action)
+	}
+	// 默认实现：返回无权限
+	return false, nil
 }
 
 // 实现其余RBAC接口方法，仅供测试
@@ -121,6 +130,22 @@ func (m *mockRBACService) AddRolePermissions(roleID, resource string, actions []
 }
 
 func (m *mockRBACService) RemoveRolePermission(roleID, resource string) error {
+	return nil
+}
+
+func (m *mockRBACService) AddUserPermission(userID, resource, action string) error {
+	return nil
+}
+
+func (m *mockRBACService) AddUserPermissions(userID, resource string, actions []string) error {
+	return nil
+}
+
+func (m *mockRBACService) RemoveUserPermission(userID, resource, action string) error {
+	return nil
+}
+
+func (m *mockRBACService) RemoveAllUserPermissions(userID string) error {
 	return nil
 }
 

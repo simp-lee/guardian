@@ -28,6 +28,13 @@ type Service interface {
 	AddRolePermissions(roleID, resource string, actions []string) error
 	RemoveRolePermission(roleID, resource string) error
 	HasPermission(userID, resource, action string) (bool, error)
+
+	// User-specific permission management
+	AddUserPermission(userID, resource, action string) error
+	AddUserPermissions(userID, resource string, actions []string) error
+	RemoveUserPermission(userID, resource, action string) error
+	RemoveAllUserPermissions(userID string) error
+	HasUserDirectPermission(userID, resource, action string) (bool, error)
 }
 
 // Common errors returned by the RBAC service

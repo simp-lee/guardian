@@ -57,6 +57,9 @@ func main() {
     g.AddRolePermission("admin", "users", "*")      // Admin can do anything with users
     g.AddRolePermission("user", "profile", "read")  // Users can read profiles
     g.AddRolePermission("user", "profile", "update") // Users can update profiles
+
+    // Add user-specific permission (directly to a user, without using roles)
+    g.AddUserPermission("user456", "articles", "delete") // This user can delete articles
     
     // Assign role to user
     g.AddUserRole("user123", "user")
@@ -168,6 +171,58 @@ g.AddUserRole("user123", "editor")
 // Check if user has specific permission
 hasPermission, _ := g.HasPermission("user123", "articles", "update")
 ```
+
+### User-Specific Permissions
+
+In addition to role-based permissions, `Guardian` allows assigning permissions directly to specific users without using roles. This is useful for granting temporary access, handling exceptions, or fine-tuning permissions for individual users.
+
+```go
+// Add direct permission to a user
+g.AddUserPermission("user123", "articles", "delete")
+
+// Add multiple permissions at once
+g.AddUserPermissions("user123", "comments", []string{"edit", "delete", "moderate"})
+
+// Check if user has direct permission (excluding role-inherited permissions)
+hasDirectPermission, _ := g.HasUserDirectPermission("user123", "articles", "delete")
+
+// Remove specific direct permission
+g.RemoveUserPermission("user123", "articles", "delete")
+
+// Remove all direct permissions
+g.RemoveAllUserPermissions("user123")
+```
+
+When checking permissions with `HasPermission`, Guardian first checks user-specific permissions, then checks role-based permissions. This means a user can get permission from either source:
+
+```go
+// Assign a role to user
+g.AddUserRole("user123", "editor")  // editor role has articles:edit permission
+
+// Add direct permission to same user
+g.AddUserPermission("user123", "articles", "delete")
+
+// Check permissions - both return true
+hasEditPermission, _ := g.HasPermission("user123", "articles", "edit")   // From role
+hasDeletePermission, _ := g.HasPermission("user123", "articles", "delete") // Direct permission
+```
+
+User-specific permissions are ideal for:
+
+1. **Temporary access**: Grant time-limited access without creating new roles
+2. **Exceptions**: Allow specific users to perform actions their roles don't permit
+3. **Fine-grained control**: Adjust individual permissions without modifying role definitions
+4. **Permission overrides**: Create exceptions for specific users without affecting entire role groups
+
+User-specific permissions support all the same features as role permissions, including hierarchical resources and wildcards:
+
+```go
+// Using wildcards and hierarchies
+g.AddUserPermission("user123", "reports/*", "read")     // User can read any report
+g.AddUserPermission("user123", "admin/settings", "*")   // User can perform any action on admin settings
+```
+
+**Note**: When a user's role is removed, their directly assigned permissions remain effective. Only explicit calls to `RemoveUserPermission` or `RemoveAllUserPermissions` will remove direct permissions.
 
 ### Caching System
 
@@ -880,6 +935,9 @@ func main() {
     g.AddRolePermission("admin", "users", "*")      // 管理员可以对用户做任何操作
     g.AddRolePermission("user", "profile", "read")  // 用户可以读取个人资料
     g.AddRolePermission("user", "profile", "update") // 用户可以更新个人资料
+
+    // 添加用户特定权限（直接授予用户权限，不通过角色）
+    g.AddUserPermission("user456", "articles", "delete") // 此用户可以删除文章
     
     // 分配角色给用户
     g.AddUserRole("user123", "user")
@@ -991,6 +1049,58 @@ g.AddUserRole("user123", "editor")
 // 检查用户是否有特定权限
 hasPermission, _ := g.HasPermission("user123", "articles", "update")
 ```
+
+### 用户特定权限
+
+除了基于角色的权限外，`Guardian` 还支持直接为特定用户分配权限，无需通过角色分配。这在需要授予临时访问权限、处理例外情况或为个别用户调整权限时非常有用。
+
+```go
+// 为用户添加直接权限
+g.AddUserPermission("user123", "articles", "delete")
+
+// 一次添加多个权限
+g.AddUserPermissions("user123", "comments", []string{"edit", "delete", "moderate"})
+
+// 检查用户是否有直接权限（不包括从角色继承的权限）
+hasDirectPermission, _ := g.HasUserDirectPermission("user123", "articles", "delete")
+
+// 移除特定直接权限
+g.RemoveUserPermission("user123", "articles", "delete")
+
+// 移除所有直接权限
+g.RemoveAllUserPermissions("user123")
+```
+
+使用 `HasPermission` 检查权限时，Guardian 会先检查用户特定权限，再检查基于角色的权限。这意味着用户可以从任一来源获得权限：
+
+```go
+// 为用户分配角色
+g.AddUserRole("user123", "editor")  // editor 角色拥有 articles:edit 权限
+
+// 为同一用户添加直接权限
+g.AddUserPermission("user123", "articles", "delete")
+
+// 检查权限 - 两种方式都会返回 true
+hasEditPermission, _ := g.HasPermission("user123", "articles", "edit")    // 来自角色的权限
+hasDeletePermission, _ := g.HasPermission("user123", "articles", "delete") // 直接分配的权限
+```
+
+用户特定权限特别适用于以下场景：
+
+1. **临时访问**：授予时限性访问权限，无需创建新角色
+2. **例外情况**：允许特定用户执行其角色通常不允许的操作
+3. **精细控制**：在不修改角色定义的情况下调整个别用户权限
+4. **权限覆盖**：为特定用户创建例外，而不影响整个角色组
+
+用户特定权限支持与角色权限相同的所有功能，包括资源层次结构和通配符：
+
+```go
+// 使用通配符和层次结构
+g.AddUserPermission("user123", "reports/*", "read")     // 用户可以读取任何报告
+g.AddUserPermission("user123", "admin/settings", "*")   // 用户可以对管理设置执行任何操作
+```
+
+**注意**：当用户的角色被移除时，其直接分配的权限仍然有效。只有明确调用 `RemoveUserPermission` 或 `RemoveAllUserPermissions` 才会移除直接权限。
 
 ### 缓存系统
 

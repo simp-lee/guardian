@@ -1,6 +1,8 @@
 package rbac
 
 import (
+	"errors"
+	"fmt"
 	"strings"
 	"time"
 
@@ -210,6 +212,15 @@ func (s *rbacService) HasPermission(userID string, resource string, action strin
 		return false, ErrInvalidAction
 	}
 
+	// Check if the user has user-specific permissions
+	hasDirectPermission, err := s.HasUserDirectPermission(userID, resource, action)
+	if err != nil {
+		return false, err
+	}
+	if hasDirectPermission {
+		return true, nil
+	}
+
 	roleIDs, err := s.storage.GetUserRoles(userID)
 	if err != nil {
 		return false, err
@@ -264,6 +275,192 @@ func (s *rbacService) HasPermission(userID string, resource string, action strin
 				hasHierarchyWildcard, err := s.storage.HasPermission(roleID, parentResource, "*")
 				if err == nil && hasHierarchyWildcard {
 					return true, nil
+				}
+			}
+		}
+	}
+
+	return false, nil
+}
+
+func userSpecificRoleID(userID string) string {
+	return "user_specific:" + userID
+}
+
+// AddUserPermission adds a permission directly to a specific user.
+// Internally, this creates and manages a user-specific role to implement the functionality.
+func (s *rbacService) AddUserPermission(userID, resource, action string) error {
+	if userID == "" {
+		return ErrEmptyUserID
+	}
+	if resource == "" {
+		return ErrInvalidResource
+	}
+	if action == "" {
+		return ErrInvalidAction
+	}
+
+	// User-specific role ID
+	roleID := userSpecificRoleID(userID)
+
+	// Check if the user-specific role already exists
+	_, err := s.GetRole(roleID)
+	if errors.Is(err, storage.ErrRoleNotFound) {
+		// Create user-specific role if it doesn't exist
+		err = s.CreateRole(roleID, "User-specific permissions", "Auto-generated for user "+userID)
+		if err != nil {
+			return fmt.Errorf("failed to create user-specific role: %w", err)
+		}
+
+		// Assign role to user
+		err = s.AddUserRole(userID, roleID)
+		if err != nil {
+			return fmt.Errorf("failed to assign user to user-specific role: %w", err)
+		}
+	} else if err != nil {
+		return fmt.Errorf("failed to check user-specific role: %w", err)
+	}
+
+	// Add permission to the user-specific role
+	return s.AddRolePermission(roleID, resource, action)
+}
+
+// AddUserPermissions adds multiple permissions to a user for a specific resource.
+func (s *rbacService) AddUserPermissions(userID, resource string, actions []string) error {
+	for _, action := range actions {
+		err := s.AddUserPermission(userID, resource, action)
+		if err != nil && err != ErrPermissionAlreadyExists {
+			return err
+		}
+	}
+	return nil
+}
+
+// RemoveUserPermission removes a specific permission from a user.
+func (s *rbacService) RemoveUserPermission(userID, resource, action string) error {
+	if userID == "" {
+		return ErrEmptyUserID
+	}
+
+	// User-specific role ID
+	roleID := userSpecificRoleID(userID)
+
+	// Check if user-specific role exists
+	role, err := s.GetRole(roleID)
+	if errors.Is(err, storage.ErrRoleNotFound) {
+		// Role doesn't exist, nothing to remove
+		return nil
+	} else if err != nil {
+		return fmt.Errorf("failed to check user-specific role: %w", err)
+	}
+
+	// Get all actions for this resource
+	var existingActions []string
+	if role.Permissions != nil {
+		if actions, exists := role.Permissions[resource]; exists {
+			existingActions = actions
+		}
+	}
+
+	// If no permissions for this resource, nothing to do
+	if len(existingActions) == 0 {
+		return nil
+	}
+
+	// Remove all permissions for the resource
+	err = s.RemoveRolePermission(roleID, resource)
+	if err != nil {
+		return fmt.Errorf("failed to remove resource permissions: %w", err)
+	}
+
+	// Re-add all actions except the one we want to remove
+	for _, existingAction := range existingActions {
+		if existingAction != action {
+			err = s.AddRolePermission(roleID, resource, existingAction)
+			if err != nil {
+				return fmt.Errorf("failed to restore permission: %w", err)
+			}
+		}
+	}
+
+	return nil
+}
+
+// RemoveAllUserPermissions removes all direct permissions from a user.
+func (s *rbacService) RemoveAllUserPermissions(userID string) error {
+	if userID == "" {
+		return ErrEmptyUserID
+	}
+
+	roleID := userSpecificRoleID(userID)
+
+	_, err := s.GetRole(roleID)
+	if errors.Is(err, storage.ErrRoleNotFound) {
+		return nil
+	} else if err != nil {
+		return err
+	}
+
+	return s.DeleteRole(roleID)
+}
+
+// HasUserDirectPermission checks if a user has a permission directly assigned to them,
+// not including permissions inherited from roles.
+func (s *rbacService) HasUserDirectPermission(userID, resource, action string) (bool, error) {
+	if userID == "" {
+		return false, ErrEmptyUserID
+	}
+	if resource == "" {
+		return false, ErrInvalidResource
+	}
+	if action == "" {
+		return false, ErrInvalidAction
+	}
+
+	roleID := userSpecificRoleID(userID)
+
+	// Check if user-specific role exists
+	role, err := s.GetRole(roleID)
+	if errors.Is(err, storage.ErrRoleNotFound) {
+		return false, nil
+	} else if err != nil {
+		return false, err
+	}
+
+	// Check direct permission matches
+	if role.Permissions != nil {
+		// Check specific permission
+		if actions, exists := role.Permissions[resource]; exists {
+			for _, a := range actions {
+				if a == action || a == "*" {
+					return true, nil
+				}
+			}
+		}
+
+		// Check resource wildcard permission
+		if actions, exists := role.Permissions["*"]; exists {
+			for _, a := range actions {
+				if a == action || a == "*" {
+					return true, nil
+				}
+			}
+		}
+
+		// Check resource hierarchy through explicit wildcard patterns
+		if strings.Contains(resource, "/") {
+			resourceParts := strings.Split(resource, "/")
+			for i := len(resourceParts) - 1; i > 0; i-- {
+				// Generate parent resource with wildcard,
+				// e.g., "articles/drafts/special" -> "articles/drafts/*"
+				parentResource := strings.Join(resourceParts[:i], "/") + "/*"
+
+				if actions, exists := role.Permissions[parentResource]; exists {
+					for _, a := range actions {
+						if a == action || a == "*" {
+							return true, nil
+						}
+					}
 				}
 			}
 		}

@@ -550,6 +550,91 @@ func (g *Guardian) HasPermission(userID, resource, action string) (bool, error) 
 	return g.rbac.HasPermission(userID, resource, action)
 }
 
+// AddUserPermission adds a permission directly to a specific user without using roles.
+//
+// Parameters:
+//   - userID: The unique identifier of the user
+//   - resource: The resource to grant permission for
+//   - action: The action to grant permission for
+//
+// Returns:
+//   - An error if the permission cannot be added
+//
+// Example:
+//
+//	err := g.AddUserPermission("user123", "articles", "delete")
+func (g *Guardian) AddUserPermission(userID, resource, action string) error {
+	return g.rbac.AddUserPermission(userID, resource, action)
+}
+
+// AddUserPermissions adds multiple permissions to a user for a specific resource.
+//
+// Parameters:
+//   - userID: The unique identifier of the user
+//   - resource: The resource to grant permissions for
+//   - actions: A slice of actions to grant permissions for
+//
+// Returns:
+//   - An error if the permissions cannot be added
+//
+// Example:
+//
+//	err := g.AddUserPermissions("user123", "articles", []string{"read", "update", "delete"})
+func (g *Guardian) AddUserPermissions(userID, resource string, actions []string) error {
+	return g.rbac.AddUserPermissions(userID, resource, actions)
+}
+
+// RemoveUserPermission removes a specific permission from a user.
+//
+// Parameters:
+//   - userID: The unique identifier of the user
+//   - resource: The resource to remove permission for
+//   - action: The action to remove permission for
+//
+// Returns:
+//   - An error if the permission cannot be removed
+//
+// Example:
+//
+//	err := g.RemoveUserPermission("user123", "articles", "delete")
+func (g *Guardian) RemoveUserPermission(userID, resource, action string) error {
+	return g.rbac.RemoveUserPermission(userID, resource, action)
+}
+
+// RemoveAllUserPermissions removes all direct permissions from a user.
+//
+// Parameters:
+//   - userID: The unique identifier of the user
+//
+// Returns:
+//   - An error if the permissions cannot be removed
+//
+// Example:
+//
+//	err := g.RemoveAllUserPermissions("user123")
+func (g *Guardian) RemoveAllUserPermissions(userID string) error {
+	return g.rbac.RemoveAllUserPermissions(userID)
+}
+
+// HasUserDirectPermission checks if a user has a permission directly assigned to them,
+// not including permissions inherited from roles.
+//
+// Parameters:
+//   - userID: The unique identifier of the user
+//   - resource: The resource to check permission for
+//   - action: The action to check permission for
+//
+// Returns:
+//   - true if the user has the direct permission, false otherwise
+//   - An error if the permission check fails
+//
+// Example:
+//
+//	hasPermission, err := g.HasUserDirectPermission("user123", "articles", "delete")
+func (g *Guardian) HasUserDirectPermission(userID, resource, action string) (bool, error) {
+	return g.rbac.HasUserDirectPermission(userID, resource, action)
+}
+
 // Close releases resources used by Guardian.
 // It should be called when the application is shutting down to ensure
 // proper cleanup of background goroutines and other resources.

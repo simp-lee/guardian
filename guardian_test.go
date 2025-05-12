@@ -997,3 +997,226 @@ func TestWithOptions(t *testing.T) {
 	rateLimitRouter.ServeHTTP(w, req1)
 	assert.Equal(t, http.StatusOK, w.Code)
 }
+
+// TestUserDirectPermissionManagement tests user-specific permissions
+func TestUserDirectPermissionManagement(t *testing.T) {
+	g, err := New(WithSecretKey("test-secret"))
+	require.NoError(t, err)
+	defer g.Close()
+
+	// Test adding direct permission
+	err = g.AddUserPermission("user1", "articles", "delete")
+	require.NoError(t, err)
+
+	// Verify direct permission was added
+	hasPermission, err := g.HasUserDirectPermission("user1", "articles", "delete")
+	require.NoError(t, err)
+	assert.True(t, hasPermission, "User should have direct permission")
+
+	// Verify permission through general HasPermission method
+	hasPermission, err = g.HasPermission("user1", "articles", "delete")
+	require.NoError(t, err)
+	assert.True(t, hasPermission, "User should have permission through HasPermission")
+
+	// Test adding multiple permissions
+	err = g.AddUserPermissions("user1", "comments", []string{"edit", "delete", "moderate"})
+	require.NoError(t, err)
+
+	// Verify multiple permissions
+	for _, action := range []string{"edit", "delete", "moderate"} {
+		hasPermission, err = g.HasUserDirectPermission("user1", "comments", action)
+		require.NoError(t, err)
+		assert.True(t, hasPermission, "User should have direct permission for "+action)
+	}
+
+	// Test removing specific permission
+	err = g.RemoveUserPermission("user1", "comments", "edit")
+	require.NoError(t, err)
+
+	// Verify removed permission
+	hasPermission, err = g.HasUserDirectPermission("user1", "comments", "edit")
+	require.NoError(t, err)
+	assert.False(t, hasPermission, "Permission should be removed")
+
+	// Verify remaining permissions
+	hasPermission, err = g.HasUserDirectPermission("user1", "comments", "delete")
+	require.NoError(t, err)
+	assert.True(t, hasPermission, "Other permissions should remain")
+
+	// Test removing all user permissions
+	err = g.RemoveAllUserPermissions("user1")
+	require.NoError(t, err)
+
+	// Verify all permissions were removed
+	hasPermission, err = g.HasUserDirectPermission("user1", "articles", "delete")
+	require.NoError(t, err)
+	assert.False(t, hasPermission, "All permissions should be removed")
+
+	hasPermission, err = g.HasUserDirectPermission("user1", "comments", "delete")
+	require.NoError(t, err)
+	assert.False(t, hasPermission, "All permissions should be removed")
+}
+
+// TestUserPermissionAndRoleInteraction tests how user-specific permissions
+// interact with role-based permissions
+func TestUserPermissionAndRoleInteraction(t *testing.T) {
+	g, err := New(WithSecretKey("test-secret"))
+	require.NoError(t, err)
+	defer g.Close()
+
+	// Create roles with different permissions
+	err = g.CreateRole("editor", "Editor", "Can edit content")
+	require.NoError(t, err)
+	err = g.AddRolePermission("editor", "articles", "edit")
+	require.NoError(t, err)
+
+	// Assign user to role
+	err = g.AddUserRole("user2", "editor")
+	require.NoError(t, err)
+
+	// Add direct user permission that's different
+	err = g.AddUserPermission("user2", "articles", "delete")
+	require.NoError(t, err)
+
+	// Verify permissions from both sources
+	hasPermission, err := g.HasPermission("user2", "articles", "edit")
+	require.NoError(t, err)
+	assert.True(t, hasPermission, "User should have permission from role")
+
+	hasPermission, err = g.HasPermission("user2", "articles", "delete")
+	require.NoError(t, err)
+	assert.True(t, hasPermission, "User should have direct permission")
+
+	// Check direct permissions only
+	hasPermission, err = g.HasUserDirectPermission("user2", "articles", "delete")
+	require.NoError(t, err)
+	assert.True(t, hasPermission, "User should have direct permission")
+
+	hasPermission, err = g.HasUserDirectPermission("user2", "articles", "edit")
+	require.NoError(t, err)
+	assert.False(t, hasPermission, "User should not have role permission as direct permission")
+
+	// Remove role but keep direct permission
+	err = g.RemoveUserRole("user2", "editor")
+	require.NoError(t, err)
+
+	// Verify role permission is gone but direct permission remains
+	hasPermission, err = g.HasPermission("user2", "articles", "edit")
+	require.NoError(t, err)
+	assert.False(t, hasPermission, "Role permission should be removed")
+
+	hasPermission, err = g.HasPermission("user2", "articles", "delete")
+	require.NoError(t, err)
+	assert.True(t, hasPermission, "Direct permission should remain")
+}
+
+// TestUserDirectPermissionWithMiddleware tests the permission middleware
+// with user-specific permissions
+func TestUserDirectPermissionWithMiddleware(t *testing.T) {
+	g, err := New(WithSecretKey("test-secret"))
+	require.NoError(t, err)
+	defer g.Close()
+
+	// Create user with direct permission
+	err = g.AddUserPermission("user3", "articles", "delete")
+	require.NoError(t, err)
+
+	// Generate token
+	token, err := g.GenerateToken("user3", time.Hour)
+	require.NoError(t, err)
+
+	// Set up router with middleware
+	router := gin.New()
+	auth := router.Group("/")
+	auth.Use(g.Auth())
+
+	// Route requiring permission
+	auth.DELETE("/articles", g.RequirePermission("articles", "delete"), func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{"result": "success"})
+	})
+
+	// Test access with token
+	req := httptest.NewRequest("DELETE", "/articles", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	// Should succeed due to direct permission
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Contains(t, w.Body.String(), "success")
+}
+
+// TestUserDirectPermissionHierarchicalResources tests wildcard and hierarchical
+// resource support with user-specific permissions
+func TestUserDirectPermissionHierarchicalResources(t *testing.T) {
+	g, err := New(WithSecretKey("test-secret"))
+	require.NoError(t, err)
+	defer g.Close()
+
+	// Add hierarchical permissions
+	err = g.AddUserPermission("user4", "api/users/*", "read")
+	require.NoError(t, err)
+
+	// Add wildcard action permission
+	err = g.AddUserPermission("user4", "settings", "*")
+	require.NoError(t, err)
+
+	// Check hierarchical permissions
+	checks := []struct {
+		resource string
+		action   string
+		expected bool
+		message  string
+	}{
+		{"api/users/123", "read", true, "Should have access to child resource"},
+		{"api/users/123/profile", "read", true, "Should have access to deeper child resource"},
+		{"api/users", "read", false, "Should not have access to parent resource"},
+		{"api/posts", "read", false, "Should not have access to unrelated resource"},
+		{"settings", "read", true, "Should have access with wildcard action"},
+		{"settings", "write", true, "Should have access with wildcard action"},
+	}
+
+	for _, check := range checks {
+		hasPermission, err := g.HasUserDirectPermission("user4", check.resource, check.action)
+		require.NoError(t, err)
+		assert.Equal(t, check.expected, hasPermission, check.message)
+
+		// Also verify through HasPermission
+		hasPermission, err = g.HasPermission("user4", check.resource, check.action)
+		require.NoError(t, err)
+		assert.Equal(t, check.expected, hasPermission, check.message+" through HasPermission")
+	}
+}
+
+// TestUserPermissionEdgeCases tests edge cases with user-specific permissions
+func TestUserPermissionEdgeCases(t *testing.T) {
+	g, err := New(WithSecretKey("test-secret"))
+	require.NoError(t, err)
+	defer g.Close()
+
+	// Test with empty values
+	err = g.AddUserPermission("", "resource", "action")
+	assert.Error(t, err, "Should error with empty userID")
+
+	err = g.AddUserPermission("user", "", "action")
+	assert.Error(t, err, "Should error with empty resource")
+
+	err = g.AddUserPermission("user", "resource", "")
+	assert.Error(t, err, "Should error with empty action")
+
+	// Test removing non-existent permission
+	err = g.RemoveUserPermission("nonexistent", "resource", "action")
+	assert.NoError(t, err, "Should not error when removing non-existent permission")
+
+	// Test removing permissions from non-existent user
+	err = g.RemoveAllUserPermissions("nonexistent")
+	assert.NoError(t, err, "Should not error when removing permissions from non-existent user")
+
+	// Test adding duplicate permission
+	err = g.AddUserPermission("user5", "resource", "action")
+	assert.NoError(t, err)
+
+	err = g.AddUserPermission("user5", "resource", "action")
+	assert.Error(t, err, "Should error when adding duplicate permission")
+	t.Logf("Duplicate permission error: %v", err)
+}
